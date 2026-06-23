@@ -3,7 +3,10 @@ use crate::AtlasError;
 
 pub fn print_modules(graph: &CodeGraph, is_json: bool) -> Result<(), AtlasError> {
     if is_json {
-        let modules: Vec<serde_json::Value> = graph.nodes.values()
+        let mut paths: Vec<&String> = graph.nodes.keys().collect();
+        paths.sort();
+        let modules: Vec<serde_json::Value> = paths.iter()
+            .map(|path| &graph.nodes[*path])
             .map(|n| serde_json::json!({
                 "path": n.path,
                 "language": n.language,

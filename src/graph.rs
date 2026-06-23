@@ -87,14 +87,6 @@ impl CodeGraph {
         }
     }
 
-    /// Get direct dependencies of a file.
-    pub fn deps_of(&self, path: &str) -> Vec<&str> {
-        self.nodes
-            .get(path)
-            .map(|n| n.deps.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default()
-    }
-
     /// Get direct reverse dependencies (who depends on this file).
     pub fn rdeps_of(&self, path: &str) -> Vec<&str> {
         self.rdeps
