@@ -1,3 +1,4 @@
+use std::sync::LazyLock;
 use regex::Regex;
 use crate::graph::Language;
 
@@ -25,13 +26,14 @@ pub fn extract_exports(content: &str, language: Language) -> Vec<String> {
 
 // --- Rust ---
 
-fn extract_rust_imports(content: &str) -> Vec<String> {
-    let re_use = Regex::new(r"(?m)^(?:\s*)use\s+([\w:]+(?:::\{[^}]+\})?)").unwrap();
-    let re_mod = Regex::new(r"(?m)^(?:\s*)(?:pub\s+)?mod\s+(\w+)\s*;").unwrap();
+static RUST_USE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^(?:\s*)use\s+([\w:]+(?:::\{[^}]+\})?)").unwrap());
+static RUST_MOD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^(?:\s*)(?:pub\s+)?mod\s+(\w+)\s*;").unwrap());
+static RUST_EXPORT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^pub\s+(?:async\s+)?(?:fn|struct|enum|trait|type|const)\s+(\w+)").unwrap());
 
+fn extract_rust_imports(content: &str) -> Vec<String> {
     let mut imports = Vec::new();
 
-    for cap in re_use.captures_iter(content) {
+    for cap in RUST_USE_RE.captures_iter(content) {
         let path = cap[1].to_string();
         // Skip std/external crates, keep crate:: and relative
         if path.starts_with("crate::") || path.starts_with("super::") {
@@ -39,7 +41,7 @@ fn extract_rust_imports(content: &str) -> Vec<String> {
         }
     }
 
-    for cap in re_mod.captures_iter(content) {
+    for cap in RUST_MOD_RE.captures_iter(content) {
         imports.push(format!("crate::{}", &cap[1]));
     }
 
@@ -47,24 +49,24 @@ fn extract_rust_imports(content: &str) -> Vec<String> {
 }
 
 fn extract_rust_exports(content: &str) -> Vec<String> {
-    let re = Regex::new(r"(?m)^pub\s+(?:async\s+)?(?:fn|struct|enum|trait|type|const)\s+(\w+)").unwrap();
-    re.captures_iter(content)
+    RUST_EXPORT_RE.captures_iter(content)
         .map(|cap| cap[1].to_string())
         .collect()
 }
 
 // --- TypeScript / JavaScript ---
 
-fn extract_js_imports(content: &str) -> Vec<String> {
-    let re_import = Regex::new(r#"(?m)import\s+.*?\s+from\s+['"]([^'"]+)['"]"#).unwrap();
-    let re_require = Regex::new(r#"(?m)require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
+static JS_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)import\s+.*?\s+from\s+['"]([^'"]+)['"]"#).unwrap());
+static JS_REQUIRE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
+static JS_EXPORT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|interface|type|enum)\s+(\w+)").unwrap());
 
+fn extract_js_imports(content: &str) -> Vec<String> {
     let mut imports = Vec::new();
 
-    for cap in re_import.captures_iter(content) {
+    for cap in JS_IMPORT_RE.captures_iter(content) {
         imports.push(cap[1].to_string());
     }
-    for cap in re_require.captures_iter(content) {
+    for cap in JS_REQUIRE_RE.captures_iter(content) {
         imports.push(cap[1].to_string());
     }
 
@@ -72,24 +74,24 @@ fn extract_js_imports(content: &str) -> Vec<String> {
 }
 
 fn extract_js_exports(content: &str) -> Vec<String> {
-    let re = Regex::new(r"(?m)export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|interface|type|enum)\s+(\w+)").unwrap();
-    re.captures_iter(content)
+    JS_EXPORT_RE.captures_iter(content)
         .map(|cap| cap[1].to_string())
         .collect()
 }
 
 // --- Python ---
 
-fn extract_python_imports(content: &str) -> Vec<String> {
-    let re_import = Regex::new(r"(?m)^import\s+([\w.]+)").unwrap();
-    let re_from = Regex::new(r"(?m)^from\s+([\w.]+)\s+import").unwrap();
+static PY_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^import\s+([\w.]+)").unwrap());
+static PY_FROM_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^from\s+([\w.]+)\s+import").unwrap());
+static PY_EXPORT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^(?:async\s+)?(?:def|class)\s+(\w+)").unwrap());
 
+fn extract_python_imports(content: &str) -> Vec<String> {
     let mut imports = Vec::new();
 
-    for cap in re_import.captures_iter(content) {
+    for cap in PY_IMPORT_RE.captures_iter(content) {
         imports.push(cap[1].to_string());
     }
-    for cap in re_from.captures_iter(content) {
+    for cap in PY_FROM_RE.captures_iter(content) {
         imports.push(cap[1].to_string());
     }
 
@@ -97,8 +99,7 @@ fn extract_python_imports(content: &str) -> Vec<String> {
 }
 
 fn extract_python_exports(content: &str) -> Vec<String> {
-    let re = Regex::new(r"(?m)^(?:async\s+)?(?:def|class)\s+(\w+)").unwrap();
-    re.captures_iter(content)
+    PY_EXPORT_RE.captures_iter(content)
         .map(|cap| cap[1].to_string())
         .filter(|name| !name.starts_with('_'))
         .collect()
@@ -106,22 +107,21 @@ fn extract_python_exports(content: &str) -> Vec<String> {
 
 // --- Go ---
 
-fn extract_go_imports(content: &str) -> Vec<String> {
-    // Single import
-    let re_single = Regex::new(r#"(?m)^import\s+"([^"]+)""#).unwrap();
-    // Block import
-    let re_block = Regex::new(r#"(?ms)import\s*\((.*?)\)"#).unwrap();
-    let re_path = Regex::new(r#""([^"]+)""#).unwrap();
+static GO_SINGLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)^import\s+"([^"]+)""#).unwrap());
+static GO_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?ms)import\s*\((.*?)\)"#).unwrap());
+static GO_PATH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""([^"]+)""#).unwrap());
+static GO_EXPORT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^func\s+(?:\([^)]+\)\s+)?([A-Z]\w*)").unwrap());
 
+fn extract_go_imports(content: &str) -> Vec<String> {
     let mut imports = Vec::new();
 
-    for cap in re_single.captures_iter(content) {
+    for cap in GO_SINGLE_RE.captures_iter(content) {
         imports.push(cap[1].to_string());
     }
 
-    for cap in re_block.captures_iter(content) {
+    for cap in GO_BLOCK_RE.captures_iter(content) {
         let block = &cap[1];
-        for path_cap in re_path.captures_iter(block) {
+        for path_cap in GO_PATH_RE.captures_iter(block) {
             imports.push(path_cap[1].to_string());
         }
     }
@@ -130,8 +130,7 @@ fn extract_go_imports(content: &str) -> Vec<String> {
 }
 
 fn extract_go_exports(content: &str) -> Vec<String> {
-    let re = Regex::new(r"(?m)^func\s+(?:\([^)]+\)\s+)?([A-Z]\w*)").unwrap();
-    re.captures_iter(content)
+    GO_EXPORT_RE.captures_iter(content)
         .map(|cap| cap[1].to_string())
         .collect()
 }
