@@ -15,10 +15,10 @@
 | cli.rs | Nix | Done |
 | main.rs | Nix | Done |
 | graph.rs | Nix | Done |
-| parse.rs | Nix | Done |
-| scan.rs | Nix | Done |
+| parse.rs | Nix + Bjarn | Enhanced (brace groups, pub(crate), super::) |
+| scan.rs | Bjarn | Rewritten (nested crate roots, full module resolution) |
 | store.rs | Nix | Done |
-| report.rs | Nix | Done (Bjarn enhancing) |
+| report.rs | Nix | Enhanced (blast ergonomics: via, risk, hints) |
 
 ## Usage
 
@@ -33,6 +33,15 @@ atlas blast src/graph.rs --depth 3  # limit traversal depth
 atlas stats                         # graph summary
 ```
 
-## Last Updated
+## Recent Changes
 
-2026-06-22 — Initial skeleton with scan/modules/deps/rdeps/blast/stats working.
+- **2026-06-27** — Major Rust dependency resolution overhaul (Nix + Bjarn collaborative):
+  - Fixed: nested crate root detection (e.g. `app/src-tauri/src/`)
+  - Fixed: `super::`, `self::`, chained `super::super::` resolution
+  - Fixed: brace group imports (`use super::types::{A, B}`)
+  - Fixed: symbol tail stripping (right-to-left segment walking)
+  - Added: `BlastEntry` with relationship chains (`via`), fan-out risk, next-step hints
+  - Added: high-risk file detection in blast output
+  - Result: Meridian-Hillock scan went from 0 deps to 614 deps
+  - 12 tests (up from 6)
+- **2026-06-22** — Initial skeleton with scan/modules/deps/rdeps/blast/stats working.

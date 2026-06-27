@@ -23,7 +23,12 @@ fn main() {
                         "message": e.to_string(),
                     }
                 });
-                eprintln!("{}", serde_json::to_string_pretty(&err_json).unwrap_or_else(|_| format!("{{\"ok\":false,\"error\":{{\"message\":\"{e}\"}}}}")));
+                eprintln!(
+                    "{}",
+                    serde_json::to_string_pretty(&err_json).unwrap_or_else(|_| format!(
+                        "{{\"ok\":false,\"error\":{{\"message\":\"{e}\"}}}}"
+                    ))
+                );
             } else {
                 eprintln!("error: {e}");
             }
@@ -46,19 +51,24 @@ fn run(cli: &Cli) -> Result<(), AtlasError> {
             store::save(&repo, &graph)?;
 
             if cli.is_json() {
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "ok": true,
-                    "stats": {
-                        "total_files": stats.total_files,
-                        "total_lines": stats.total_lines,
-                        "total_deps": stats.total_deps,
-                        "by_language": stats.by_language,
-                    },
-                    "index_path": ".agent-atlas/graph.json",
-                }))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "stats": {
+                            "total_files": stats.total_files,
+                            "total_lines": stats.total_lines,
+                            "total_deps": stats.total_deps,
+                            "by_language": stats.by_language,
+                        },
+                        "index_path": ".agent-atlas/graph.json",
+                    }))?
+                );
             } else {
-                println!("Scanned {} files ({} lines, {} deps)",
-                    stats.total_files, stats.total_lines, stats.total_deps);
+                println!(
+                    "Scanned {} files ({} lines, {} deps)",
+                    stats.total_files, stats.total_lines, stats.total_deps
+                );
                 println!("Index saved to .agent-atlas/graph.json");
             }
             Ok(())

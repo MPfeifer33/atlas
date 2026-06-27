@@ -1,5 +1,5 @@
-use std::collections::{HashMap, HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// A node in the knowledge graph — one source file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,18 +95,24 @@ impl CodeGraph {
             .unwrap_or_default()
     }
 
-    /// Compute transitive blast radius via BFS.
-    pub fn blast_radius(&self, path: &str, max_depth: usize) -> Vec<(String, usize)> {
+    /// Compute transitive blast radius via BFS with relationship tracking.
+    pub fn blast_radius(&self, path: &str, max_depth: usize) -> Vec<BlastEntry> {
         let mut visited: HashSet<String> = HashSet::new();
-        let mut result: Vec<(String, usize)> = Vec::new();
-        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+        let mut result: Vec<BlastEntry> = Vec::new();
+        let mut queue: VecDeque<(String, usize, String)> = VecDeque::new();
 
         visited.insert(path.to_string());
-        queue.push_back((path.to_string(), 0));
+        queue.push_back((path.to_string(), 0, String::new()));
 
-        while let Some((current, depth)) = queue.pop_front() {
+        while let Some((current, depth, via)) = queue.pop_front() {
             if depth > 0 {
-                result.push((current.clone(), depth));
+                let fan_out = self.rdeps_of(&current).len();
+                result.push(BlastEntry {
+                    path: current.clone(),
+                    depth,
+                    via,
+                    fan_out,
+                });
             }
             if depth >= max_depth {
                 continue;
@@ -114,12 +120,12 @@ impl CodeGraph {
             for rdep in self.rdeps_of(&current) {
                 if !visited.contains(rdep) {
                     visited.insert(rdep.to_string());
-                    queue.push_back((rdep.to_string(), depth + 1));
+                    queue.push_back((rdep.to_string(), depth + 1, current.clone()));
                 }
             }
         }
 
-        result.sort_by_key(|(_, d)| *d);
+        result.sort_by_key(|e| e.depth);
         result
     }
 
@@ -130,7 +136,9 @@ impl CodeGraph {
         let mut total_deps = 0;
 
         for node in self.nodes.values() {
-            *by_language.entry(node.language.label().to_string()).or_default() += 1;
+            *by_language
+                .entry(node.language.label().to_string())
+                .or_default() += 1;
             total_lines += node.lines;
             total_deps += node.deps.len();
         }
@@ -142,6 +150,19 @@ impl CodeGraph {
             by_language,
         }
     }
+}
+
+/// A single entry in a blast radius result.
+#[derive(Debug, Clone, Serialize)]
+pub struct BlastEntry {
+    /// File path affected
+    pub path: String,
+    /// Distance from the source file (1 = direct dependent)
+    pub depth: usize,
+    /// Which file caused this to be in the blast radius
+    pub via: String,
+    /// How many files depend on this file (downstream risk indicator)
+    pub fan_out: usize,
 }
 
 #[derive(Debug, Serialize)]
