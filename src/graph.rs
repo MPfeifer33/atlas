@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
+pub const INDEX_SCHEMA_VERSION: u32 = 2;
+
 /// A node in the knowledge graph — one source file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileNode {
@@ -12,6 +14,12 @@ pub struct FileNode {
     pub imports: Vec<String>,
     /// Resolved dependency paths (other files in the graph)
     pub deps: Vec<String>,
+    /// Local imports Atlas expected to resolve but could not match to a file.
+    #[serde(default)]
+    pub unresolved_imports: Vec<String>,
+    /// Imports that appear to point outside the scanned project.
+    #[serde(default)]
+    pub external_imports: Vec<String>,
     /// Functions/symbols exported (name only, no type info)
     pub exports: Vec<String>,
     /// Line count
@@ -56,6 +64,9 @@ impl Language {
 /// The full codebase graph.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CodeGraph {
+    /// Metadata used to decide whether the graph still matches the source tree.
+    #[serde(default)]
+    pub metadata: Option<IndexMetadata>,
     pub nodes: HashMap<String, FileNode>,
     /// Reverse dependency index: file -> files that depend on it
     #[serde(skip)]
@@ -65,6 +76,7 @@ pub struct CodeGraph {
 impl CodeGraph {
     pub fn new() -> Self {
         Self {
+            metadata: None,
             nodes: HashMap::new(),
             rdeps: HashMap::new(),
         }
@@ -84,6 +96,11 @@ impl CodeGraph {
                     .or_default()
                     .push(path.clone());
             }
+        }
+
+        for dependents in self.rdeps.values_mut() {
+            dependents.sort();
+            dependents.dedup();
         }
     }
 
@@ -125,7 +142,7 @@ impl CodeGraph {
             }
         }
 
-        result.sort_by_key(|e| e.depth);
+        result.sort_by(|a, b| a.depth.cmp(&b.depth).then_with(|| a.path.cmp(&b.path)));
         result
     }
 
@@ -134,6 +151,8 @@ impl CodeGraph {
         let mut by_language: HashMap<String, usize> = HashMap::new();
         let mut total_lines = 0;
         let mut total_deps = 0;
+        let mut total_unresolved_imports = 0;
+        let mut total_external_imports = 0;
 
         for node in self.nodes.values() {
             *by_language
@@ -141,15 +160,35 @@ impl CodeGraph {
                 .or_default() += 1;
             total_lines += node.lines;
             total_deps += node.deps.len();
+            total_unresolved_imports += node.unresolved_imports.len();
+            total_external_imports += node.external_imports.len();
         }
 
         GraphStats {
             total_files: self.nodes.len(),
             total_lines,
             total_deps,
+            total_unresolved_imports,
+            total_external_imports,
             by_language,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexMetadata {
+    pub schema_version: u32,
+    pub generated_at_unix_ms: u64,
+    pub atlas_version: String,
+    pub repo_path: String,
+    pub indexed_files: Vec<IndexedFileMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexedFileMeta {
+    pub path: String,
+    pub modified_unix_ms: u64,
+    pub byte_len: u64,
 }
 
 /// A single entry in a blast radius result.
@@ -170,5 +209,7 @@ pub struct GraphStats {
     pub total_files: usize,
     pub total_lines: usize,
     pub total_deps: usize,
+    pub total_unresolved_imports: usize,
+    pub total_external_imports: usize,
     pub by_language: HashMap<String, usize>,
 }

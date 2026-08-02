@@ -51,6 +51,15 @@ fn run(cli: &Cli) -> Result<(), AtlasError> {
             store::save(&repo, &graph)?;
 
             if cli.is_json() {
+                let index = graph.metadata.as_ref().map(|metadata| {
+                    serde_json::json!({
+                        "schema_version": metadata.schema_version,
+                        "generated_at_unix_ms": metadata.generated_at_unix_ms,
+                        "atlas_version": metadata.atlas_version,
+                        "repo_path": metadata.repo_path,
+                        "indexed_files": metadata.indexed_files.len(),
+                    })
+                });
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
@@ -59,8 +68,11 @@ fn run(cli: &Cli) -> Result<(), AtlasError> {
                             "total_files": stats.total_files,
                             "total_lines": stats.total_lines,
                             "total_deps": stats.total_deps,
+                            "total_unresolved_imports": stats.total_unresolved_imports,
+                            "total_external_imports": stats.total_external_imports,
                             "by_language": stats.by_language,
                         },
+                        "index": index,
                         "index_path": ".agent-atlas/graph.json",
                     }))?
                 );
@@ -89,6 +101,23 @@ fn run(cli: &Cli) -> Result<(), AtlasError> {
             let graph = load_or_scan(&repo, cli)?;
             report::print_blast(&graph, file, *depth, cli.is_json())
         }
+        Command::Doctor { limit } => {
+            let graph = load_or_scan(&repo, cli)?;
+            let freshness = store::freshness(&repo, &graph)?;
+            report::print_doctor(&graph, &freshness, *limit, cli.is_json())
+        }
+        Command::Hotspots { limit } => {
+            let graph = load_or_scan(&repo, cli)?;
+            report::print_hotspots(&graph, *limit, cli.is_json())
+        }
+        Command::Symbols { query, limit } => {
+            let graph = load_or_scan(&repo, cli)?;
+            report::print_symbols(&graph, query.as_deref(), *limit, cli.is_json())
+        }
+        Command::Impact { file, depth } => {
+            let graph = load_or_scan(&repo, cli)?;
+            report::print_impact(&graph, file, *depth, cli.is_json())
+        }
         Command::Stats => {
             let graph = load_or_scan(&repo, cli)?;
             let stats = graph.stats();
@@ -100,6 +129,11 @@ fn run(cli: &Cli) -> Result<(), AtlasError> {
 /// Load existing index or scan if none exists.
 fn load_or_scan(repo: &std::path::Path, cli: &Cli) -> Result<graph::CodeGraph, AtlasError> {
     if let Some(graph) = store::load(repo)? {
+        let freshness = store::freshness(repo, &graph)?;
+        if !cli.is_json() && freshness.stale {
+            eprintln!("warning: {}", freshness.summary());
+            eprintln!("warning: run atlas scan --force to refresh the graph");
+        }
         Ok(graph)
     } else {
         if !cli.is_json() {

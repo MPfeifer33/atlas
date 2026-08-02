@@ -74,6 +74,34 @@ pub enum Command {
         #[arg(long, default_value = "5")]
         depth: usize,
     },
+    /// Check graph health and map confidence
+    Doctor {
+        /// Max rows to show in each section
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+    /// Show high fan-in / high blast-radius files
+    Hotspots {
+        /// Max hotspots to show
+        #[arg(long, default_value = "15")]
+        limit: usize,
+    },
+    /// Search exported symbols
+    Symbols {
+        /// Optional case-insensitive symbol/path search
+        query: Option<String>,
+        /// Max symbols to show
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+    /// Bundle deps, rdeps, blast radius, and hints for a file
+    Impact {
+        /// File path (relative to repo root)
+        file: String,
+        /// Max depth for transitive traversal
+        #[arg(long, default_value = "5")]
+        depth: usize,
+    },
     /// Show graph statistics
     Stats,
 }

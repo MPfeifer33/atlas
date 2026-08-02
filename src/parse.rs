@@ -46,13 +46,13 @@ fn extract_rust_imports(content: &str) -> Vec<String> {
     // e.g. "use super::types::{Foo, Bar}" captures "super::types"
     for cap in RUST_USE_BRACE_RE.captures_iter(content) {
         let path = cap[1].to_string();
-        if path.starts_with("crate::") || path.starts_with("super::") || path.starts_with("self::")
-        {
-            // Track the byte offset to avoid double-matching this line with the simple regex
-            let start = cap.get(0).map(|m| m.start()).unwrap_or(0);
-            seen_lines.insert(start);
-            imports.push(path);
+        if is_rust_self_only_import(&path) {
+            continue;
         }
+        // Track the byte offset to avoid double-matching this line with the simple regex
+        let start = cap.get(0).map(|m| m.start()).unwrap_or(0);
+        seen_lines.insert(start);
+        imports.push(path);
     }
 
     // Second pass: simple path imports (no brace groups)
@@ -64,10 +64,10 @@ fn extract_rust_imports(content: &str) -> Vec<String> {
         let path = cap[1].to_string();
         // Strip trailing :: that might remain from partial matches
         let path = path.trim_end_matches(':').to_string();
-        if path.starts_with("crate::") || path.starts_with("super::") || path.starts_with("self::")
-        {
-            imports.push(path);
+        if is_rust_self_only_import(&path) {
+            continue;
         }
+        imports.push(path);
     }
 
     for cap in RUST_MOD_RE.captures_iter(content) {
@@ -75,6 +75,10 @@ fn extract_rust_imports(content: &str) -> Vec<String> {
     }
 
     imports
+}
+
+fn is_rust_self_only_import(path: &str) -> bool {
+    matches!(path, "self" | "super" | "crate")
 }
 
 fn extract_rust_exports(content: &str) -> Vec<String> {
@@ -88,6 +92,10 @@ fn extract_rust_exports(content: &str) -> Vec<String> {
 
 static JS_IMPORT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?m)import\s+.*?\s+from\s+['"]([^'"]+)['"]"#).unwrap());
+static JS_SIDE_EFFECT_IMPORT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?m)^\s*import\s+['"]([^'"]+)['"]"#).unwrap());
+static JS_DYNAMIC_IMPORT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"import\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
 static JS_REQUIRE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?m)require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
 static JS_EXPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -98,6 +106,12 @@ fn extract_js_imports(content: &str) -> Vec<String> {
     let mut imports = Vec::new();
 
     for cap in JS_IMPORT_RE.captures_iter(content) {
+        imports.push(cap[1].to_string());
+    }
+    for cap in JS_SIDE_EFFECT_IMPORT_RE.captures_iter(content) {
+        imports.push(cap[1].to_string());
+    }
+    for cap in JS_DYNAMIC_IMPORT_RE.captures_iter(content) {
         imports.push(cap[1].to_string());
     }
     for cap in JS_REQUIRE_RE.captures_iter(content) {
@@ -119,7 +133,7 @@ fn extract_js_exports(content: &str) -> Vec<String> {
 static PY_IMPORT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^import\s+([\w.]+)").unwrap());
 static PY_FROM_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^from\s+([\w.]+)\s+import").unwrap());
+    LazyLock::new(|| Regex::new(r"(?m)^from\s+([.\w]+)\s+import\s+([^\n#]+)").unwrap());
 static PY_EXPORT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^(?:async\s+)?(?:def|class)\s+(\w+)").unwrap());
 
@@ -130,7 +144,18 @@ fn extract_python_imports(content: &str) -> Vec<String> {
         imports.push(cap[1].to_string());
     }
     for cap in PY_FROM_RE.captures_iter(content) {
-        imports.push(cap[1].to_string());
+        let module = cap[1].trim();
+        let imported_names = cap[2].trim();
+        if module.chars().all(|ch| ch == '.') {
+            for name in imported_names.split(',') {
+                let name = name.trim().split(" as ").next().unwrap_or("").trim();
+                if !name.is_empty() && name != "*" {
+                    imports.push(format!("{module}{name}"));
+                }
+            }
+        } else {
+            imports.push(module.to_string());
+        }
     }
 
     imports
@@ -186,9 +211,10 @@ mod tests {
     fn rust_use_crate() {
         let code = "use crate::graph::CodeGraph;\nuse crate::parse;\nuse std::path::Path;\n";
         let imports = extract_rust_imports(code);
-        assert_eq!(imports.len(), 2);
+        assert_eq!(imports.len(), 3);
         assert!(imports.contains(&"crate::graph::CodeGraph".to_string()));
         assert!(imports.contains(&"crate::parse".to_string()));
+        assert!(imports.contains(&"std::path::Path".to_string()));
     }
 
     #[test]
@@ -215,21 +241,28 @@ mod tests {
         let code = r#"import { foo } from './bar';
 import baz from "../qux";
 const x = require('./lib');
+import './setup';
+const lazy = import('./lazy');
 "#;
         let imports = extract_js_imports(code);
-        assert_eq!(imports.len(), 3);
+        assert_eq!(imports.len(), 5);
         assert!(imports.contains(&"./bar".to_string()));
         assert!(imports.contains(&"../qux".to_string()));
         assert!(imports.contains(&"./lib".to_string()));
+        assert!(imports.contains(&"./setup".to_string()));
+        assert!(imports.contains(&"./lazy".to_string()));
     }
 
     #[test]
     fn python_imports() {
-        let code = "import os\nfrom pathlib import Path\nimport mymodule.sub\n";
+        let code = "import os\nfrom pathlib import Path\nfrom .local import thing\nfrom . import util, models as m\nimport mymodule.sub\n";
         let imports = extract_python_imports(code);
-        assert_eq!(imports.len(), 3);
+        assert_eq!(imports.len(), 6);
         assert!(imports.contains(&"os".to_string()));
         assert!(imports.contains(&"pathlib".to_string()));
+        assert!(imports.contains(&".local".to_string()));
+        assert!(imports.contains(&".util".to_string()));
+        assert!(imports.contains(&".models".to_string()));
         assert!(imports.contains(&"mymodule.sub".to_string()));
     }
 
@@ -237,9 +270,10 @@ const x = require('./lib');
     fn rust_brace_group_imports() {
         let code = "use super::types::{ClusterSummary, MemoryTier};\nuse crate::memory::{store, injection};\nuse std::collections::HashMap;\n";
         let imports = extract_rust_imports(code);
-        assert_eq!(imports.len(), 2);
+        assert_eq!(imports.len(), 3);
         assert!(imports.contains(&"super::types".to_string()));
         assert!(imports.contains(&"crate::memory".to_string()));
+        assert!(imports.contains(&"std::collections::HashMap".to_string()));
     }
 
     #[test]
@@ -254,7 +288,7 @@ const x = require('./lib');
 
     #[test]
     fn rust_super_imports() {
-        let code = "use super::MemoryError;\nuse super::types::ClusterSummary;\n";
+        let code = "use super::*;\nuse super::MemoryError;\nuse super::types::ClusterSummary;\n";
         let imports = extract_rust_imports(code);
         assert_eq!(imports.len(), 2);
         assert!(imports.contains(&"super::MemoryError".to_string()));

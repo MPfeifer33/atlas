@@ -2,7 +2,7 @@
 
 **What:** Codebase knowledge graph. Scans source files, extracts imports/exports, resolves dependencies, and answers structural queries: deps, reverse deps, blast radius.
 
-**Status:** MVP complete. Scan, modules, deps, rdeps, blast, stats all working. Multi-language (Rust, TS/JS, Python, Go).
+**Status:** Agent-usable graph tool. Scan, modules, deps, rdeps, blast, stats, doctor, hotspots, symbols, and impact all working. Multi-language (Rust, TS/JS, Python, Go).
 
 **Tech:** Rust 2021, clap 4, serde/serde_json, regex, walkdir, thiserror.
 
@@ -30,11 +30,31 @@ atlas deps src/main.rs              # what does this file depend on?
 atlas rdeps src/graph.rs            # what depends on this file?
 atlas blast src/graph.rs            # transitive blast radius
 atlas blast src/graph.rs --depth 3  # limit traversal depth
+atlas doctor                        # graph health and map confidence
+atlas hotspots                      # high fan-in / high blast-radius files
+atlas symbols Graph                 # search exported symbols
+atlas impact src/graph.rs           # pre-edit orientation bundle
 atlas stats                         # graph summary
 ```
 
 ## Recent Changes
 
+- **2026-08-02** — Agent-facing hardening and workflow expansion (Bjarn, with Helix review lane opened):
+  - Added unresolved local import tracking per file.
+  - Added external import tracking per file.
+  - Added stats totals for unresolved and external imports.
+  - Fixed TS/JS relative import resolution to resolve from the importing file's directory.
+  - Added JS side-effect import and dynamic `import()` extraction.
+  - Added Python relative `from .module import ...` extraction/resolution.
+  - Added Python `from . import module` expansion.
+  - Improved Go package best-effort matching by parent directory.
+  - Added Rust external import capture.
+  - Fixed Rust unresolved multi-segment imports so they do not fall back to crate root.
+  - Added `doctor`, `hotspots`, `symbols`, and `impact` commands.
+  - Fixed JSON blast `high_risk` threshold to match text output.
+  - Added README and `docs/AGENT-WORKFLOW.md`.
+  - Added index metadata and stale detection for changed, missing, and new source files.
+  - 21 tests (up from 12).
 - **2026-06-27** — Major Rust dependency resolution overhaul (Nix + Bjarn collaborative):
   - Fixed: nested crate root detection (e.g. `app/src-tauri/src/`)
   - Fixed: `super::`, `self::`, chained `super::super::` resolution
