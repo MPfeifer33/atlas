@@ -1,5 +1,16 @@
 /target
 
+# Private local config and generated data
+.env
+.env.*
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
 # Local agent tool state
 .agent-probe/
 .agent-workspace/
