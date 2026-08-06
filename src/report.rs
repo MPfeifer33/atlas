@@ -2,6 +2,110 @@ use crate::graph::{CodeGraph, GraphStats};
 use crate::store::IndexFreshness;
 use crate::AtlasError;
 
+const DOCTOR_SCHEMA_VERSION: &str = "atlas.doctor.v1";
+const GRAPH_CONTRACT_VERSION: &str = "atlas.graph.v2";
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentDoctor {
+    pub schema_version: String,
+    pub graph_contract_version: String,
+    pub status: DoctorStatus,
+    pub action_level: ActionLevel,
+    pub gates: AgentGates,
+    pub health: DoctorHealth,
+    pub index: IndexFreshness,
+    pub unresolved_imports: Vec<ImportProblem>,
+    pub external_imports: Vec<ImportProblem>,
+    pub isolated_files: Vec<String>,
+    pub hotspots: Vec<HotspotEntry>,
+    pub advice: String,
+    pub recommendations: Vec<String>,
+    pub recommended_commands: Vec<RecommendedCommand>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DoctorStatus {
+    Ready,
+    Caution,
+    Blocked,
+}
+
+impl DoctorStatus {
+    fn label(self) -> &'static str {
+        match self {
+            DoctorStatus::Ready => "ready",
+            DoctorStatus::Caution => "caution",
+            DoctorStatus::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionLevel {
+    None,
+    Refresh,
+    Review,
+    Stop,
+}
+
+impl ActionLevel {
+    fn label(self) -> &'static str {
+        match self {
+            ActionLevel::None => "none",
+            ActionLevel::Refresh => "refresh",
+            ActionLevel::Review => "review",
+            ActionLevel::Stop => "stop",
+        }
+    }
+
+    pub fn strict_exit_code(self) -> i32 {
+        match self {
+            ActionLevel::None => 0,
+            ActionLevel::Refresh => 10,
+            ActionLevel::Review | ActionLevel::Stop => 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentGates {
+    pub files_indexed: bool,
+    pub index_has_metadata: bool,
+    pub schema_current: bool,
+    pub source_delta_clear: bool,
+    pub index_fresh: bool,
+    pub unresolved_imports_clear: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DoctorHealth {
+    pub status: String,
+    pub total_files: usize,
+    pub total_deps: usize,
+    pub total_unresolved_imports: usize,
+    pub total_external_imports: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecommendedCommand {
+    pub kind: RecommendationKind,
+    pub command: Option<String>,
+    pub argv: Option<Vec<String>>,
+    pub label: String,
+    pub reason: String,
+    pub reason_code: String,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecommendationKind {
+    Command,
+    Manual,
+}
+
 pub fn print_modules(graph: &CodeGraph, is_json: bool) -> Result<(), AtlasError> {
     if is_json {
         let mut paths: Vec<&String> = graph.nodes.keys().collect();
@@ -245,75 +349,98 @@ pub fn print_doctor(
     freshness: &IndexFreshness,
     limit: usize,
     is_json: bool,
-) -> Result<(), AtlasError> {
-    let stats = graph.stats();
-    let unresolved = unresolved_entries(graph, limit);
-    let external = external_entries(graph, limit);
-    let isolated = isolated_files(graph, limit);
-    let hotspots = hotspot_entries(graph, limit);
-    let status = doctor_status(&stats, freshness);
+) -> Result<AgentDoctor, AtlasError> {
+    let doctor = build_doctor(graph, freshness, limit);
 
     if is_json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "ok": true,
-                "health": {
-                    "status": status,
-                    "total_files": stats.total_files,
-                    "total_deps": stats.total_deps,
-                    "total_unresolved_imports": stats.total_unresolved_imports,
-                    "total_external_imports": stats.total_external_imports,
-                },
-                "index": freshness,
-                "unresolved_imports": unresolved,
-                "external_imports": external,
-                "isolated_files": isolated,
-                "hotspots": hotspots,
+                "schema_version": &doctor.schema_version,
+                "graph_contract_version": &doctor.graph_contract_version,
+                "status": doctor.status,
+                "action_level": doctor.action_level,
+                "doctor": &doctor,
+                // Compatibility aliases for existing consumers.
+                "health": &doctor.health,
+                "index": &doctor.index,
+                "unresolved_imports": &doctor.unresolved_imports,
+                "external_imports": &doctor.external_imports,
+                "isolated_files": &doctor.isolated_files,
+                "hotspots": &doctor.hotspots,
+                "advice": &doctor.advice,
+                "recommendations": &doctor.recommendations,
+                "recommended_commands": &doctor.recommended_commands,
             }))?
         );
     } else {
         println!("atlas doctor:");
         println!();
-        println!("  Health: {status}");
-        println!("  Files: {}", stats.total_files);
-        println!("  Dependencies: {}", stats.total_deps);
+        println!(
+            "  Status: {} ({})",
+            doctor.status.label(),
+            doctor.action_level.label()
+        );
+        println!("  Health: {}", doctor.health.status);
+        println!("  Files: {}", doctor.health.total_files);
+        println!("  Dependencies: {}", doctor.health.total_deps);
         println!(
             "  Unresolved local imports: {}",
-            stats.total_unresolved_imports
+            doctor.health.total_unresolved_imports
         );
-        println!("  External imports: {}", stats.total_external_imports);
-        println!("  Index: {}", freshness.summary());
+        println!(
+            "  External imports: {}",
+            doctor.health.total_external_imports
+        );
+        println!("  Index: {}", doctor.index.summary());
+        println!();
+        println!("  Gates:");
+        println!("    files indexed: {}", doctor.gates.files_indexed);
+        println!(
+            "    index has metadata: {}",
+            doctor.gates.index_has_metadata
+        );
+        println!("    schema current: {}", doctor.gates.schema_current);
+        println!(
+            "    source delta clear: {}",
+            doctor.gates.source_delta_clear
+        );
+        println!("    index fresh: {}", doctor.gates.index_fresh);
+        println!(
+            "    unresolved imports clear: {}",
+            doctor.gates.unresolved_imports_clear
+        );
 
-        if freshness.stale {
+        if doctor.index.stale {
             println!();
             println!("  Index freshness warnings:");
-            for file in freshness.changed_files.iter().take(limit) {
+            for file in doctor.index.changed_files.iter().take(limit) {
                 println!("    changed: {file}");
             }
-            for file in freshness.missing_files.iter().take(limit) {
+            for file in doctor.index.missing_files.iter().take(limit) {
                 println!("    missing: {file}");
             }
-            for file in freshness.new_files.iter().take(limit) {
+            for file in doctor.index.new_files.iter().take(limit) {
                 println!("    new: {file}");
             }
         }
 
-        if unresolved.is_empty() {
+        if doctor.unresolved_imports.is_empty() {
             println!();
             println!("  No unresolved local imports found.");
         } else {
             println!();
             println!("  Unresolved local imports:");
-            for entry in &unresolved {
+            for entry in &doctor.unresolved_imports {
                 println!("    ? {} imports {}", entry.file, entry.import);
             }
         }
 
-        if !hotspots.is_empty() {
+        if !doctor.hotspots.is_empty() {
             println!();
             println!("  Hotspots:");
-            for entry in &hotspots {
+            for entry in &doctor.hotspots {
                 println!(
                     "    ! {} ({} rdeps, {} blast, {} deps)",
                     entry.path, entry.rdeps_count, entry.blast_radius_count, entry.deps_count
@@ -321,16 +448,24 @@ pub fn print_doctor(
             }
         }
 
-        if !isolated.is_empty() {
+        if !doctor.isolated_files.is_empty() {
             println!();
             println!("  Isolated files:");
-            for file in &isolated {
+            for file in &doctor.isolated_files {
                 println!("    - {file}");
             }
         }
+
+        println!();
+        println!("  Advice: {}", doctor.advice);
+        println!();
+        println!("  Recommended next steps:");
+        for recommendation in &doctor.recommended_commands {
+            println!("    - {}", recommendation.label);
+        }
     }
 
-    Ok(())
+    Ok(doctor)
 }
 
 pub fn print_hotspots(graph: &CodeGraph, limit: usize, is_json: bool) -> Result<(), AtlasError> {
@@ -606,14 +741,238 @@ pub fn print_stats(stats: &GraphStats, is_json: bool) -> Result<(), AtlasError> 
     Ok(())
 }
 
-#[derive(Debug, serde::Serialize)]
-struct ImportProblem {
+fn build_doctor(graph: &CodeGraph, freshness: &IndexFreshness, limit: usize) -> AgentDoctor {
+    let stats = graph.stats();
+    let unresolved = unresolved_entries(graph, limit);
+    let external = external_entries(graph, limit);
+    let isolated = isolated_files(graph, limit);
+    let hotspots = hotspot_entries(graph, limit);
+    let health_status = doctor_status(&stats, freshness).to_string();
+    let health = DoctorHealth {
+        status: health_status,
+        total_files: stats.total_files,
+        total_deps: stats.total_deps,
+        total_unresolved_imports: stats.total_unresolved_imports,
+        total_external_imports: stats.total_external_imports,
+    };
+    let gates = gates_for(&stats, freshness);
+    let action_level = action_level_for(&gates);
+    let status = status_for(action_level);
+    let advice = advice_for(action_level, &gates);
+    let recommended_commands = recommended_commands_for(action_level, &gates, &unresolved);
+    let recommendations = recommended_commands
+        .iter()
+        .map(recommendation_label)
+        .collect();
+
+    AgentDoctor {
+        schema_version: DOCTOR_SCHEMA_VERSION.to_string(),
+        graph_contract_version: GRAPH_CONTRACT_VERSION.to_string(),
+        status,
+        action_level,
+        gates,
+        health,
+        index: freshness.clone(),
+        unresolved_imports: unresolved,
+        external_imports: external,
+        isolated_files: isolated,
+        hotspots,
+        advice,
+        recommendations,
+        recommended_commands,
+    }
+}
+
+fn gates_for(stats: &GraphStats, freshness: &IndexFreshness) -> AgentGates {
+    AgentGates {
+        files_indexed: stats.total_files > 0,
+        index_has_metadata: freshness.has_metadata,
+        schema_current: !freshness.schema_mismatch,
+        source_delta_clear: freshness.changed_files.is_empty()
+            && freshness.missing_files.is_empty()
+            && freshness.new_files.is_empty(),
+        index_fresh: !freshness.stale,
+        unresolved_imports_clear: stats.total_unresolved_imports == 0,
+    }
+}
+
+fn action_level_for(gates: &AgentGates) -> ActionLevel {
+    if !gates.files_indexed {
+        ActionLevel::Stop
+    } else if !gates.index_fresh || !gates.schema_current || !gates.source_delta_clear {
+        ActionLevel::Refresh
+    } else if !gates.unresolved_imports_clear {
+        ActionLevel::Review
+    } else {
+        ActionLevel::None
+    }
+}
+
+fn status_for(action_level: ActionLevel) -> DoctorStatus {
+    match action_level {
+        ActionLevel::None => DoctorStatus::Ready,
+        ActionLevel::Refresh => DoctorStatus::Caution,
+        ActionLevel::Review | ActionLevel::Stop => DoctorStatus::Blocked,
+    }
+}
+
+fn advice_for(action_level: ActionLevel, gates: &AgentGates) -> String {
+    match action_level {
+        ActionLevel::None => {
+            "graph is current and no unresolved local imports were found; Atlas results are ready for planning".to_string()
+        }
+        ActionLevel::Refresh => {
+            let mut reasons = Vec::new();
+            if !gates.index_has_metadata {
+                reasons.push("missing metadata");
+            }
+            if !gates.schema_current {
+                reasons.push("schema mismatch");
+            }
+            if !gates.source_delta_clear {
+                reasons.push("source files changed since scan");
+            }
+            if reasons.is_empty() {
+                reasons.push("stale index");
+            }
+            format!(
+                "refresh the graph before making dependency or blast-radius claims ({})",
+                reasons.join(", ")
+            )
+        }
+        ActionLevel::Review => {
+            "unresolved local imports may hide dependencies; inspect map gaps before relying on blast-radius output".to_string()
+        }
+        ActionLevel::Stop => {
+            "no source files are indexed; scan the repo or verify Atlas supports the project layout before using graph results".to_string()
+        }
+    }
+}
+
+fn recommended_commands_for(
+    action_level: ActionLevel,
+    gates: &AgentGates,
+    unresolved: &[ImportProblem],
+) -> Vec<RecommendedCommand> {
+    let mut commands = Vec::new();
+
+    if !gates.files_indexed {
+        commands.push(command_recommendation(
+            "atlas scan --force",
+            &["atlas", "scan", "--force"],
+            "no_files_indexed",
+            "doctor found zero indexed source files",
+            true,
+        ));
+        commands.push(manual_recommendation(
+            "Verify Atlas supports this project layout if scan still indexes zero files",
+            "unsupported_project_layout",
+            "zero indexed files may mean no supported source extensions were found",
+            true,
+        ));
+        return commands;
+    }
+
+    if !gates.index_fresh || !gates.schema_current || !gates.source_delta_clear {
+        commands.push(command_recommendation(
+            "atlas scan --force",
+            &["atlas", "scan", "--force"],
+            "index_not_fresh",
+            "index metadata, schema, or source fingerprints are not current",
+            true,
+        ));
+    }
+
+    if !gates.unresolved_imports_clear {
+        let first_file = unresolved
+            .first()
+            .map(|entry| entry.file.as_str())
+            .unwrap_or("<file>");
+        commands.push(manual_recommendation(
+            "Inspect unresolved local imports before trusting blast-radius output",
+            "unresolved_local_imports",
+            "Atlas found local-looking imports that did not resolve to indexed files",
+            action_level != ActionLevel::Refresh,
+        ));
+        commands.push(command_recommendation(
+            format!("atlas deps {first_file}").as_str(),
+            &["atlas", "deps", first_file],
+            "inspect_first_unresolved_file",
+            "one unresolved file is enough to make graph impact incomplete",
+            false,
+        ));
+    }
+
+    if commands.is_empty() {
+        commands.push(manual_recommendation(
+            "Use atlas impact <file> before editing the target file",
+            "normal_graph_workflow",
+            "graph is current and no unresolved local imports were found",
+            false,
+        ));
+        commands.push(command_recommendation(
+            "atlas hotspots --limit 20",
+            &["atlas", "hotspots", "--limit", "20"],
+            "review_hotspots",
+            "hotspots highlight files with broad downstream impact",
+            false,
+        ));
+    }
+
+    commands
+}
+
+fn command_recommendation(
+    label: &str,
+    argv: &[&str],
+    reason_code: &str,
+    reason: &str,
+    required: bool,
+) -> RecommendedCommand {
+    RecommendedCommand {
+        kind: RecommendationKind::Command,
+        command: Some(label.to_string()),
+        argv: Some(argv.iter().map(|arg| (*arg).to_string()).collect()),
+        label: label.to_string(),
+        reason: reason.to_string(),
+        reason_code: reason_code.to_string(),
+        required,
+    }
+}
+
+fn manual_recommendation(
+    label: &str,
+    reason_code: &str,
+    reason: &str,
+    required: bool,
+) -> RecommendedCommand {
+    RecommendedCommand {
+        kind: RecommendationKind::Manual,
+        command: None,
+        argv: None,
+        label: label.to_string(),
+        reason: reason.to_string(),
+        reason_code: reason_code.to_string(),
+        required,
+    }
+}
+
+fn recommendation_label(command: &RecommendedCommand) -> String {
+    if command.required {
+        format!("required: {} ({})", command.label, command.reason_code)
+    } else {
+        format!("optional: {} ({})", command.label, command.reason_code)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportProblem {
     file: String,
     import: String,
 }
 
-#[derive(Debug, serde::Serialize)]
-struct HotspotEntry {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HotspotEntry {
     path: String,
     language: String,
     lines: usize,
@@ -768,5 +1127,92 @@ mod tests {
         };
 
         assert_eq!(doctor_status(&stats, &freshness), "warning");
+    }
+
+    #[test]
+    fn doctor_action_refreshes_stale_index_before_unresolved_review() {
+        let gates = AgentGates {
+            files_indexed: true,
+            index_has_metadata: true,
+            schema_current: true,
+            source_delta_clear: false,
+            index_fresh: false,
+            unresolved_imports_clear: false,
+        };
+
+        assert_eq!(action_level_for(&gates), ActionLevel::Refresh);
+        assert_eq!(status_for(ActionLevel::Refresh), DoctorStatus::Caution);
+        let recommendations = recommended_commands_for(ActionLevel::Refresh, &gates, &[]);
+        assert_eq!(recommendations[0].reason_code, "index_not_fresh");
+        assert!(recommendations[0].required);
+    }
+
+    #[test]
+    fn doctor_action_reviews_current_unresolved_imports() {
+        let gates = AgentGates {
+            files_indexed: true,
+            index_has_metadata: true,
+            schema_current: true,
+            source_delta_clear: true,
+            index_fresh: true,
+            unresolved_imports_clear: false,
+        };
+        let unresolved = vec![ImportProblem {
+            file: "src/lib.rs".to_string(),
+            import: "./missing".to_string(),
+        }];
+
+        assert_eq!(action_level_for(&gates), ActionLevel::Review);
+        assert_eq!(status_for(ActionLevel::Review), DoctorStatus::Blocked);
+        let recommendations = recommended_commands_for(ActionLevel::Review, &gates, &unresolved);
+        assert!(recommendations
+            .iter()
+            .any(|command| command.reason_code == "unresolved_local_imports" && command.required));
+        assert!(recommendations
+            .iter()
+            .any(|command| command.argv.as_ref().is_some_and(|argv| argv
+                == &[
+                    "atlas".to_string(),
+                    "deps".to_string(),
+                    "src/lib.rs".to_string()
+                ])));
+    }
+
+    #[test]
+    fn doctor_action_stops_when_no_files_are_indexed() {
+        let gates = AgentGates {
+            files_indexed: false,
+            index_has_metadata: true,
+            schema_current: true,
+            source_delta_clear: true,
+            index_fresh: true,
+            unresolved_imports_clear: true,
+        };
+
+        assert_eq!(action_level_for(&gates), ActionLevel::Stop);
+        assert_eq!(status_for(ActionLevel::Stop), DoctorStatus::Blocked);
+    }
+
+    #[test]
+    fn clean_doctor_gates_are_ready() {
+        let gates = AgentGates {
+            files_indexed: true,
+            index_has_metadata: true,
+            schema_current: true,
+            source_delta_clear: true,
+            index_fresh: true,
+            unresolved_imports_clear: true,
+        };
+
+        assert_eq!(action_level_for(&gates), ActionLevel::None);
+        assert_eq!(status_for(ActionLevel::None), DoctorStatus::Ready);
+    }
+
+    #[test]
+    fn strict_exit_codes_cover_atlas_actions() {
+        assert_eq!(ActionLevel::None.strict_exit_code(), 0);
+        assert_eq!(ActionLevel::Refresh.strict_exit_code(), 10);
+        assert_eq!(ActionLevel::Review.strict_exit_code(), 30);
+        assert_eq!(ActionLevel::Stop.strict_exit_code(), 30);
     }
 }

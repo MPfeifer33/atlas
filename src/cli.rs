@@ -79,6 +79,9 @@ pub enum Command {
         /// Max rows to show in each section
         #[arg(long, default_value = "10")]
         limit: usize,
+        /// Exit non-zero according to action_level after printing the normal report
+        #[arg(long)]
+        strict: bool,
     },
     /// Show high fan-in / high blast-radius files
     Hotspots {

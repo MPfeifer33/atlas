@@ -101,10 +101,14 @@ fn run(cli: &Cli) -> Result<(), AtlasError> {
             let graph = load_or_scan(&repo, cli)?;
             report::print_blast(&graph, file, *depth, cli.is_json())
         }
-        Command::Doctor { limit } => {
+        Command::Doctor { limit, strict } => {
             let graph = load_or_scan(&repo, cli)?;
             let freshness = store::freshness(&repo, &graph)?;
-            report::print_doctor(&graph, &freshness, *limit, cli.is_json())
+            let doctor = report::print_doctor(&graph, &freshness, *limit, cli.is_json())?;
+            if *strict {
+                std::process::exit(doctor.action_level.strict_exit_code());
+            }
+            Ok(())
         }
         Command::Hotspots { limit } => {
             let graph = load_or_scan(&repo, cli)?;

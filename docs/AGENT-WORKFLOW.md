@@ -16,6 +16,7 @@ Run this before serious analysis. Atlas stores the graph in
 ```sh
 atlas doctor
 atlas --format json doctor
+atlas doctor --strict
 ```
 
 Stop and inspect unresolved local imports before trusting blast-radius output.
@@ -27,6 +28,19 @@ outside the scanned repo.
 
 Also check index freshness. If `doctor` reports changed, missing, or new source
 files, run `atlas scan --force` before using `impact` or `blast` to plan work.
+
+For automation, prefer JSON doctor fields over prose:
+
+- `status`: `ready`, `caution`, or `blocked`
+- `action_level`: `none`, `refresh`, `review`, or `stop`
+- `gates.index_fresh`: false means refresh before graph-based claims
+- `gates.unresolved_imports_clear`: false means review map gaps before trusting
+  blast-radius output
+- `recommended_commands`: structured next steps with stable `argv` and
+  `reason_code`
+
+`--strict` is still a successful report path: it prints the normal report, then
+exits 0 for `none`, 10 for `refresh`, and 30 for `review` or `stop`.
 
 ## 3. Find Important Files
 
@@ -77,6 +91,8 @@ claims, tasks, decisions, and completion receipts.
 
 ## Interpretation Rules
 
+- If `doctor.action_level` is `refresh`, run `atlas scan --force` before making
+  dependency or blast-radius claims.
 - If `doctor` reports unresolved local imports, call that out in the work plan.
 - If `doctor` reports a stale index, refresh before making graph-based claims.
 - If `impact` reports a broad blast radius, test direct dependents first.

@@ -39,6 +39,18 @@ atlas stats                         # graph summary
 
 ## Recent Changes
 
+- **2026-08-06** — Suite doctor parity (Helix):
+  - Added `atlas.doctor.v1` JSON envelope with top-level `status`,
+    `action_level`, `gates`, `advice`, `recommendations`, and
+    `recommended_commands`.
+  - Kept compatibility aliases for existing `health`, `index`,
+    `unresolved_imports`, `external_imports`, `isolated_files`, and `hotspots`
+    consumers.
+  - Added `doctor --strict` gate exits: `none` = 0, `refresh` = 10,
+    `review`/`stop` = 30.
+  - Added explicit action precedence: refresh stale maps before reviewing
+    unresolved import warnings.
+  - 26 tests (up from 21).
 - **2026-08-02** — Agent-facing hardening and workflow expansion (Bjarn, with Helix review lane opened):
   - Added unresolved local import tracking per file.
   - Added external import tracking per file.

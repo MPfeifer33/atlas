@@ -45,7 +45,7 @@ pub fn has_index(repo: &Path) -> bool {
     atlas_dir(repo).join(GRAPH_FILE).exists()
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct IndexFreshness {
     pub has_metadata: bool,
     pub schema_version: Option<u32>,

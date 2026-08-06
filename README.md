@@ -36,6 +36,7 @@ atlas stats
 
 ```sh
 atlas doctor
+atlas doctor --strict
 ```
 
 Checks graph health. The most important field is unresolved local imports: if it
@@ -47,6 +48,18 @@ inspect those files before trusting blast-radius output.
 ```sh
 atlas scan --force
 ```
+
+`doctor --strict` prints the same report, then exits by the reported
+`action_level`: `none` exits 0, `refresh` exits 10, and `review`/`stop` exits
+30. JSON doctor output exposes the suite-oriented envelope:
+
+- `schema_version: atlas.doctor.v1`
+- `status: ready | caution | blocked`
+- `action_level: none | refresh | review | stop`
+- `gates` for indexed files, schema freshness, source deltas, and unresolved
+  import clearance
+- `recommended_commands` with `kind`, `argv`, `reason`, `reason_code`, and
+  `required`
 
 ```sh
 atlas hotspots --limit 20
