@@ -81,9 +81,9 @@ For a coordinated project run:
 
 ```sh
 switchboard --transport store project bind project.name /path/to/repo --latch-bin /path/to/latch
-switchboard --transport store project actor-map project.name agent.bjarn bjarn
-switchboard --transport store send project.name --from agent.bjarn --type status "Atlas scan started."
-latch --actor bjarn claim acquire src --ttl 2h --intent "Atlas-guided implementation"
+switchboard --transport store project actor-map project.name agent.builder builder
+switchboard --transport store send project.name --from agent.builder --type status "Atlas scan started."
+latch --actor builder claim acquire src --ttl 2h --intent "Atlas-guided implementation"
 ```
 
 Keep Switchboard messages for the conversational trail and Latch records for
