@@ -51,6 +51,13 @@ atlas stats                         # graph summary
   - Added explicit action precedence: refresh stale maps before reviewing
     unresolved import warnings.
   - 26 tests (up from 21).
+- **2026-08-08** — Holt suite follow-up (Helix):
+  - Skipped generated frontend output directories such as `.svelte-kit`,
+    `.nuxt`, and `.output` during source scans.
+  - Resolved Rust `super::super::*` imports that appear inside inline
+    `#[cfg(test)] mod tests` modules by accounting for the extra inline module
+    frame.
+  - 28 tests (up from 26).
 - **2026-08-02** — Agent-facing hardening and workflow expansion (Bjarn, with Helix review lane opened):
   - Added unresolved local import tracking per file.
   - Added external import tracking per file.

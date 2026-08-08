@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -11,6 +12,7 @@ use crate::AtlasError;
 pub fn scan_project(repo: &Path) -> Result<CodeGraph, AtlasError> {
     let mut graph = CodeGraph::new();
     let mut indexed_files = Vec::new();
+    let mut source_contents = BTreeMap::new();
 
     for source in source_files(repo)? {
         let path = source.path.as_path();
@@ -27,7 +29,7 @@ pub fn scan_project(repo: &Path) -> Result<CodeGraph, AtlasError> {
         let exports = parse::extract_exports(&content, language);
 
         let node = FileNode {
-            path: rel_path,
+            path: rel_path.clone(),
             language,
             imports,
             deps: Vec::new(), // Resolved after all files scanned
@@ -39,10 +41,11 @@ pub fn scan_project(repo: &Path) -> Result<CodeGraph, AtlasError> {
 
         graph.add_node(node);
         indexed_files.push(source.meta);
+        source_contents.insert(rel_path, content);
     }
 
     // Resolve imports to actual file paths in the graph
-    resolve_deps(&mut graph, repo);
+    resolve_deps(&mut graph, repo, &source_contents);
 
     // Build reverse index
     graph.build_rdeps();
@@ -121,7 +124,7 @@ fn unix_time_ms(time: std::time::SystemTime) -> u64 {
 }
 
 /// Resolve raw import strings to actual file paths in the graph.
-fn resolve_deps(graph: &mut CodeGraph, repo: &Path) {
+fn resolve_deps(graph: &mut CodeGraph, repo: &Path, source_contents: &BTreeMap<String, String>) {
     let all_paths: Vec<String> = graph.nodes.keys().cloned().collect();
 
     for path in &all_paths {
@@ -129,12 +132,20 @@ fn resolve_deps(graph: &mut CodeGraph, repo: &Path) {
         let language = node.language;
         let imports = node.imports.clone();
         let file_path = path.clone();
+        let source_content = source_contents.get(path).map(String::as_str);
 
         let mut deps = Vec::new();
         let mut unresolved_imports = Vec::new();
         let mut external_imports = Vec::new();
         for import in &imports {
-            let resolution = resolve_import(import, &file_path, language, &all_paths, repo);
+            let resolution = resolve_import(
+                import,
+                &file_path,
+                language,
+                &all_paths,
+                repo,
+                source_content,
+            );
             for resolved in resolution.deps {
                 if resolved != file_path {
                     deps.push(resolved);
@@ -177,10 +188,11 @@ fn resolve_import(
     language: Language,
     all_paths: &[String],
     _repo: &Path,
+    source_content: Option<&str>,
 ) -> ImportResolution {
     match language {
         Language::Rust => {
-            let deps = resolve_rust_import(import, source_file, all_paths);
+            let deps = resolve_rust_import(import, source_file, all_paths, source_content);
             let is_local = is_rust_local_import(import);
             ImportResolution {
                 unresolved_local: is_local && deps.is_empty(),
@@ -227,7 +239,12 @@ fn resolve_import(
     }
 }
 
-fn resolve_rust_import(import: &str, source_file: &str, all_paths: &[String]) -> Vec<String> {
+fn resolve_rust_import(
+    import: &str,
+    source_file: &str,
+    all_paths: &[String],
+    source_content: Option<&str>,
+) -> Vec<String> {
     let src_root = rust_src_root(source_file);
     let source_module = rust_module_segments(source_file, &src_root);
     let mut resolved = Vec::new();
@@ -239,6 +256,17 @@ fn resolve_rust_import(import: &str, source_file: &str, all_paths: &[String]) ->
 
         if let Some(path) = resolve_rust_segments(&src_root, &segments, all_paths) {
             resolved.push(path);
+            continue;
+        }
+
+        if rust_import_appears_inside_inline_test_module(&expanded, source_content) {
+            let mut inline_module = source_module.clone();
+            inline_module.push("tests".to_string());
+            if let Some(segments) = rust_import_segments(&expanded, &inline_module) {
+                if let Some(path) = resolve_rust_segments(&src_root, &segments, all_paths) {
+                    resolved.push(path);
+                }
+            }
         }
     }
 
@@ -276,6 +304,22 @@ fn expand_rust_import(import: &str) -> Vec<String> {
 
 fn strip_rust_alias(import: &str) -> &str {
     import.split(" as ").next().unwrap_or(import).trim()
+}
+
+fn rust_import_appears_inside_inline_test_module(
+    import: &str,
+    source_content: Option<&str>,
+) -> bool {
+    let Some(content) = source_content else {
+        return false;
+    };
+    let Some(module_start) = content.find("mod tests") else {
+        return false;
+    };
+    let test_module = &content[module_start..];
+    test_module.contains(&format!("use {import}"))
+        || test_module.contains(&format!("use {import}::"))
+        || test_module.contains(&format!("use {import};"))
 }
 
 fn rust_import_segments(import: &str, source_module: &[String]) -> Option<Vec<String>> {
@@ -490,6 +534,9 @@ fn is_ignored(path: &Path, repo: &Path) -> bool {
             | "dist"
             | "build"
             | ".next"
+            | ".svelte-kit"
+            | ".nuxt"
+            | ".output"
             | ".agent-witness"
             | ".agent-atlas"
             | "vendor"
@@ -638,6 +685,38 @@ mod tests {
     }
 
     #[test]
+    fn ignores_sveltekit_generated_output() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("app/.svelte-kit/generated")).unwrap();
+        fs::create_dir_all(temp.path().join("app/src/lib")).unwrap();
+
+        fs::write(
+            temp.path().join("app/.svelte-kit/generated/root.js"),
+            "import missing from './root.svelte';\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("app/src/main.ts"),
+            "import { helper } from './lib/helper';\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("app/src/lib/helper.ts"),
+            "export const helper = 1;\n",
+        )
+        .unwrap();
+
+        let graph = scan_project(temp.path()).unwrap();
+
+        assert!(!graph
+            .nodes
+            .contains_key("app/.svelte-kit/generated/root.js"));
+        let node = graph.nodes.get("app/src/main.ts").unwrap();
+        assert_eq!(node.deps, vec!["app/src/lib/helper.ts".to_string()]);
+        assert!(node.unresolved_imports.is_empty());
+    }
+
+    #[test]
     fn tracks_unresolved_local_and_external_imports() {
         let temp = tempfile::tempdir().unwrap();
         let src = temp.path().join("src");
@@ -709,5 +788,48 @@ mod tests {
 
         assert_eq!(node.deps, vec!["bar/foo.go".to_string()]);
         assert!(node.external_imports.is_empty());
+    }
+
+    #[test]
+    fn resolves_rust_imports_from_inline_test_modules() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugin = temp.path().join("src/plugin");
+        fs::create_dir_all(&plugin).unwrap();
+
+        fs::write(temp.path().join("src/lib.rs"), "pub mod plugin;\n").unwrap();
+        fs::write(
+            plugin.join("mod.rs"),
+            "pub mod transport;\npub mod types;\n",
+        )
+        .unwrap();
+        fs::write(
+            plugin.join("types.rs"),
+            "pub const MAX_IPC_PAYLOAD_BYTES: usize = 100;\n",
+        )
+        .unwrap();
+        fs::write(
+            plugin.join("transport.rs"),
+            r#"
+pub struct PluginProcess;
+
+#[cfg(test)]
+mod tests {
+    use super::super::types::MAX_IPC_PAYLOAD_BYTES;
+    use super::*;
+
+    #[test]
+    fn smoke() {
+        assert_eq!(MAX_IPC_PAYLOAD_BYTES, 100);
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let graph = scan_project(temp.path()).unwrap();
+        let node = graph.nodes.get("src/plugin/transport.rs").unwrap();
+
+        assert!(node.deps.contains(&"src/plugin/types.rs".to_string()));
+        assert!(node.unresolved_imports.is_empty());
     }
 }

@@ -10,6 +10,9 @@ atlas scan --force
 
 Run this before serious analysis. Atlas stores the graph in
 `.agent-atlas/graph.json`; stale graphs are cheap to replace.
+The scan intentionally skips dependency and generated-output directories such
+as `node_modules`, `target`, `dist`, `.next`, `.svelte-kit`, `.nuxt`, and
+`.output` so framework build artifacts do not create false local-import gaps.
 
 ## 2. Check Map Health
 
@@ -94,6 +97,8 @@ claims, tasks, decisions, and completion receipts.
 - If `doctor.action_level` is `refresh`, run `atlas scan --force` before making
   dependency or blast-radius claims.
 - If `doctor` reports unresolved local imports, call that out in the work plan.
+  Generated-output gaps should not normally appear; if they do, treat that as
+  an Atlas ignore-rule bug before treating it as application architecture.
 - If `doctor` reports a stale index, refresh before making graph-based claims.
 - If `impact` reports a broad blast radius, test direct dependents first.
 - If a target file is a hotspot, avoid broad refactors unless the user asked for

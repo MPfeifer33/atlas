@@ -127,6 +127,10 @@ Resolution is intentionally local-project focused. External packages are kept as
 external imports, while local imports that should resolve but do not are tracked
 as unresolved imports.
 
+Atlas skips common dependency and generated-output directories while scanning,
+including `node_modules`, `target`, `dist`, `.next`, `.svelte-kit`, `.nuxt`,
+and `.output`. Generated framework files are not treated as repo source truth.
+
 ## Map Confidence
 
 Atlas distinguishes three import outcomes:
